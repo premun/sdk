@@ -1,13 +1,18 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#nullable disable
+
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Razor.Language;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Razor;
-using Microsoft.CodeAnalysis.Razor.Serialization;
+using Microsoft.CodeAnalysis.Text;
 using Microsoft.NET.Sdk.Razor.Tool.CommandLineUtils;
-using Newtonsoft.Json;
+using Microsoft.NET.Sdk.Razor.Tool.Json;
+using System.Text.Json;
 
 namespace Microsoft.NET.Sdk.Razor.Tool
 {
@@ -23,6 +28,7 @@ namespace Microsoft.NET.Sdk.Razor.Tool
             Configuration = Option("-c", "Razor configuration name", CommandOptionType.SingleValue);
             ExtensionNames = Option("-n", "extension name", CommandOptionType.MultipleValue);
             ExtensionFilePaths = Option("-e", "extension file path", CommandOptionType.MultipleValue);
+            UseSourceGenerator = Option("--use-source-generator", "host the Razor source generator instead of the engine", CommandOptionType.NoValue);
         }
 
         public CommandArgument Assemblies { get; }
@@ -38,6 +44,8 @@ namespace Microsoft.NET.Sdk.Razor.Tool
         public CommandOption ExtensionNames { get; }
 
         public CommandOption ExtensionFilePaths { get; }
+
+        public CommandOption UseSourceGenerator { get; }
 
         protected override bool ValidateArguments()
         {
@@ -141,6 +149,14 @@ namespace Microsoft.NET.Sdk.Razor.Tool
                 return Task.FromResult(ExitCodeFailure);
             }
 
+            if (UseSourceGenerator.HasValue())
+            {
+                return Task.FromResult(ExecuteWithSourceGenerator(
+                    projectDirectory: ProjectDirectory.Value(),
+                    outputFilePath: TagHelperManifest.Value(),
+                    assemblies: Assemblies.Values.ToArray()));
+            }
+
             var version = RazorLanguageVersion.Parse(Version.Value());
             var configuration = new RazorConfiguration(version, Configuration.Value(), Extensions: [], UseConsolidatedMvcViews: false);
 
@@ -169,14 +185,81 @@ namespace Microsoft.NET.Sdk.Razor.Tool
 
                 b.Features.Add(new DefaultMetadataReferenceFeature() { References = metadataReferences });
                 b.Features.Add(new CompilationTagHelperFeature());
-                b.Features.Add(new DefaultTagHelperDescriptorProvider());
+
+                b.RegisterDefaultTagHelperProducer();
 
                 CompilerFeatures.Register(b);
             });
 
             var feature = engine.Engine.Features.OfType<ITagHelperFeature>().Single();
-            var tagHelpers = feature.GetDescriptors();
+            var tagHelpers = feature.GetTagHelpers();
 
+            WriteTagHelperManifest(outputFilePath, tagHelpers);
+
+            return ExitCodeSuccess;
+        }
+
+        private int ExecuteWithSourceGenerator(string projectDirectory, string outputFilePath, string[] assemblies)
+        {
+            outputFilePath = Path.Combine(projectDirectory, outputFilePath);
+
+            var parseOptions = RazorSourceGeneratorHost.CreateParseOptions(LanguageVersion.Default);
+            var compilation = RazorSourceGeneratorHost.CreateCompilation(assemblies, Parent.AssemblyReferenceProvider);
+
+            // The generator only discovers tag helpers from references when the project has at least one
+            // Razor file. A synthetic empty view satisfies that without contributing a tag helper itself:
+            // only components (.razor files) feed the compilation-based half of discovery.
+            var syntheticPath = Path.Combine(projectDirectory, "__rzc_discover__.cshtml");
+            var inputFiles = new List<RazorInputFile>
+            {
+                new RazorInputFile(syntheticPath, "__rzc_discover__.cshtml", text: SourceText.From(string.Empty, Encoding.UTF8)),
+            };
+
+            var optionsProvider = RazorSourceGeneratorHost.CreateOptionsProvider(
+                razorConfiguration: Configuration.Value(),
+                razorLanguageVersion: Version.Value(),
+                rootNamespace: "ASP",
+                supportLocalizedComponentNames: false,
+                generateMetadataSourceChecksumAttributes: false,
+                projectDirectory: projectDirectory,
+                files: inputFiles);
+            var additionalTexts = RazorSourceGeneratorHost.CreateAdditionalTexts(inputFiles);
+
+            var runResult = RazorSourceGeneratorHost.CreateDriver(parseOptions)
+                .AddAdditionalTexts(additionalTexts)
+                .WithUpdatedAnalyzerConfigOptions(optionsProvider)
+                .RunGeneratorsAndUpdateCompilation(compilation, out _, out _)
+                .GetRunResult().Results.Single();
+
+            var success = true;
+            foreach (var diagnostic in runResult.Diagnostics)
+            {
+                if (diagnostic.Severity == DiagnosticSeverity.Error)
+                {
+                    success = false;
+                }
+
+                Error.WriteLine(diagnostic.ToString());
+            }
+
+            if (!success)
+            {
+                return ExitCodeFailure;
+            }
+
+            if (!RazorSourceGeneratorHostOutput.TryGet(runResult, out var razorResult))
+            {
+                Error.WriteLine("The Razor source generator did not produce the expected host output.");
+                return ExitCodeFailure;
+            }
+
+            WriteTagHelperManifest(outputFilePath, razorResult.TagHelpers);
+
+            return ExitCodeSuccess;
+        }
+
+        private void WriteTagHelperManifest(string outputFilePath, IReadOnlyList<TagHelperDescriptor> tagHelpers)
+        {
             using (var stream = new MemoryStream())
             {
                 Serialize(stream, tagHelpers);
@@ -195,8 +278,6 @@ namespace Microsoft.NET.Sdk.Razor.Tool
                     }
                 }
             }
-
-            return ExitCodeSuccess;
         }
 
         private static byte[] Hash(string path)
@@ -241,14 +322,7 @@ namespace Microsoft.NET.Sdk.Razor.Tool
 
         private static void Serialize(Stream stream, IReadOnlyList<TagHelperDescriptor> tagHelpers)
         {
-            using (var writer = new StreamWriter(stream, Encoding.UTF8, bufferSize: 4096, leaveOpen: true))
-            {
-                var serializer = new JsonSerializer();
-                serializer.Converters.Add(new TagHelperDescriptorJsonConverter());
-                serializer.Converters.Add(new RazorDiagnosticJsonConverter());
-
-                serializer.Serialize(writer, tagHelpers);
-            }
+            JsonSerializer.Serialize(stream, tagHelpers, TagHelperDescriptorJsonConverter.SerializerOptions);
         }
     }
 }

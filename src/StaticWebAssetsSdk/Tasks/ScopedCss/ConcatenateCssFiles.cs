@@ -1,15 +1,17 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#nullable disable
+
 #if NET9_0_OR_GREATER
 using System.Globalization;
 #endif
-using System.Security.Cryptography;
 using Microsoft.Build.Framework;
 
 namespace Microsoft.AspNetCore.StaticWebAssets.Tasks;
 
-public class ConcatenateCssFiles : Task
+[MSBuildMultiThreadableTask]
+public class ConcatenateCssFiles : Task, IMultiThreadableTask
 {
     private static readonly char[] _separator = ['/'];
 
@@ -27,6 +29,8 @@ public class ConcatenateCssFiles : Task
 
     [Required]
     public string OutputFile { get; set; }
+
+    public TaskEnvironment TaskEnvironment { get; set; } = TaskEnvironment.Fallback;
 
     public override bool Execute()
     {
@@ -83,7 +87,7 @@ public class ConcatenateCssFiles : Task
 #else
             builder.AppendLine(CultureInfo.InvariantCulture, $"/* {NormalizePath(current.GetMetadata("BasePath"))}/{NormalizePath(current.GetMetadata("RelativePath"))} */");
 #endif
-            foreach (var line in File.ReadLines(current.GetMetadata("FullPath")))
+            foreach (var line in File.ReadLines(TaskEnvironment.GetAbsolutePath(current.ItemSpec)))
             {
                 builder.AppendLine(line);
             }
@@ -91,10 +95,11 @@ public class ConcatenateCssFiles : Task
 
         var content = builder.ToString();
 
-        if (!File.Exists(OutputFile) || !SameContent(content, OutputFile))
+        string outputFile = string.IsNullOrWhiteSpace(OutputFile) ? OutputFile : TaskEnvironment.GetAbsolutePath(OutputFile);
+        if (!File.Exists(outputFile) || !SameContent(content, outputFile))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(OutputFile));
-            File.WriteAllText(OutputFile, content);
+            Directory.CreateDirectory(Path.GetDirectoryName(outputFile));
+            File.WriteAllText(outputFile, content);
         }
 
         return !Log.HasLoggedErrors;
@@ -104,31 +109,7 @@ public class ConcatenateCssFiles : Task
 
     private static bool SameContent(string content, string outputFilePath)
     {
-        var contentHash = GetContentHash(content);
-
         var outputContent = File.ReadAllText(outputFilePath);
-        var outputContentHash = GetContentHash(outputContent);
-
-        for (var i = 0; i < outputContentHash.Length; i++)
-        {
-            if (outputContentHash[i] != contentHash[i])
-            {
-                return false;
-            }
-        }
-
-        return true;
-
-        static byte[] GetContentHash(string content)
-        {
-            var data = Encoding.UTF8.GetBytes(content);
-#if !NET9_0_OR_GREATER
-            using var sha256 = SHA256.Create();
-            var result = sha256.ComputeHash(data);
-#else
-            var result = SHA256.HashData(data);
-#endif
-            return result;
-        }
+        return string.Equals(content, outputContent);
     }
 }

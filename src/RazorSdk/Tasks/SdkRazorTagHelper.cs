@@ -1,6 +1,7 @@
 ﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#nullable disable
 
 using Microsoft.Build.Framework;
 
@@ -29,6 +30,8 @@ namespace Microsoft.AspNetCore.Razor.Tasks
         public string TagHelperManifest { get; set; }
 
         public string ProjectRoot { get; set; }
+
+        public bool UseSourceGenerator { get; set; }
 
         internal override string Command => "discover";
 
@@ -111,6 +114,11 @@ namespace Microsoft.AspNetCore.Razor.Tasks
 
                 builder.AppendLine("-e");
                 builder.AppendLine(Path.GetFullPath(Extensions[i].GetMetadata(AssemblyFilePath)));
+            }
+
+            if (UseSourceGenerator)
+            {
+                builder.AppendLine("--use-source-generator");
             }
 
             return builder.ToString();

@@ -1,11 +1,13 @@
 ﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using Microsoft.Extensions.Logging;
 using Microsoft.NET.Build.Containers.Resources;
 
 namespace Microsoft.NET.Build.Containers.LocalDaemons;
 
+/// <summary>
+/// Writes built images to a local archive instead of loading them into a container runtime.
+/// </summary>
 internal class ArchiveFileRegistry : ILocalRegistry
 {
     public string ArchiveOutputPath { get; private set; }
@@ -15,14 +17,22 @@ internal class ArchiveFileRegistry : ILocalRegistry
         ArchiveOutputPath = archiveOutputPath;
     }
 
-    public async Task LoadAsync(BuiltImage image, SourceImageReference sourceReference,
-        DestinationImageReference destinationReference,
-        CancellationToken cancellationToken)
+    internal async Task LoadAsync<T>(T image, SourceImageReference sourceReference, 
+        DestinationImageReference destinationReference, CancellationToken cancellationToken,
+        Func<T, SourceImageReference, DestinationImageReference, Stream, CancellationToken, Task> writeStreamFunc)
     {
         var fullPath = Path.GetFullPath(ArchiveOutputPath);
 
+        var directorySeparatorChar = Path.DirectorySeparatorChar;
+
+        // if doesn't end with a file extension, assume it's a directory
+        if (!Path.HasExtension(fullPath))
+        {
+           fullPath += Path.DirectorySeparatorChar;
+        }
+
         // pointing to a directory? -> append default name
-        if (Directory.Exists(fullPath) || ArchiveOutputPath.EndsWith("/") || ArchiveOutputPath.EndsWith("\\"))
+        if (fullPath.EndsWith(directorySeparatorChar))
         {
             fullPath = Path.Combine(fullPath, destinationReference.Repository + ".tar.gz");
         }
@@ -36,18 +46,30 @@ internal class ArchiveFileRegistry : ILocalRegistry
 
         ArchiveOutputPath = fullPath;
         await using var fileStream = File.Create(fullPath);
-        await DockerCli.WriteImageToStreamAsync(
-            image,
-            sourceReference,
-            destinationReference,
-            fileStream,
-            cancellationToken).ConfigureAwait(false);
+
+        // Call the delegate to write the image to the stream
+        await writeStreamFunc(image, sourceReference, destinationReference, fileStream, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public async Task LoadAsync(BuiltImage image, SourceImageReference sourceReference,
+        DestinationImageReference destinationReference,
+        CancellationToken cancellationToken) 
+        => await LoadAsync(image, sourceReference, destinationReference, cancellationToken,
+            ContainerArchive.WriteImageToStreamAsync);
+
+    /// <inheritdoc />
+    public async Task LoadAsync(MultiArchImage multiArchImage, SourceImageReference sourceReference,
+        DestinationImageReference destinationReference,
+        CancellationToken cancellationToken) 
+        => await LoadAsync(multiArchImage, sourceReference, destinationReference, cancellationToken,
+            ContainerArchive.WriteMultiArchOciImageToStreamAsync);
+
+    /// <inheritdoc />
     public Task<bool> IsAvailableAsync(CancellationToken cancellationToken) => Task.FromResult(true);
 
+    /// <inheritdoc />
     public bool IsAvailable() => true;
-
 
     public override string ToString()
     {

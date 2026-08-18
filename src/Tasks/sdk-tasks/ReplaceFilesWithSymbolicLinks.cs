@@ -1,9 +1,9 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
-// See the LICENSE file in the project root for more information.
+
+#nullable disable
 
 #if !NETFRAMEWORK
-#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -17,7 +17,7 @@ using System.Runtime.InteropServices;
 namespace Microsoft.DotNet.Build.Tasks
 {
     /// <summary>
-    /// Replaces files that have the same content with hard links.
+    /// Replaces files that have the same content with symbolic links.
     /// </summary>
     public sealed class ReplaceFilesWithSymbolicLinks  : Task
     {

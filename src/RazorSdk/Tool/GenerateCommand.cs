@@ -1,13 +1,16 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#nullable disable
+
+using System.Collections.Immutable;
 using System.Diagnostics;
 using Microsoft.AspNetCore.Razor.Language;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.Razor;
-using Microsoft.CodeAnalysis.Razor.Serialization;
 using Microsoft.NET.Sdk.Razor.Tool.CommandLineUtils;
-using Newtonsoft.Json;
+using Microsoft.NET.Sdk.Razor.Tool.Json;
+using System.Text.Json;
 
 namespace Microsoft.NET.Sdk.Razor.Tool
 {
@@ -32,6 +35,8 @@ namespace Microsoft.NET.Sdk.Razor.Tool
             CSharpLanguageVersion = Option("--csharp-language-version", "csharp language version generated code", CommandOptionType.SingleValue);
             GenerateDeclaration = Option("--generate-declaration", "Generate declaration", CommandOptionType.NoValue);
             SupportLocalizedComponentNames = Option("--support-localized-component-names", "support localized component names", CommandOptionType.NoValue);
+            Assemblies = Option("-a", "reference assemblies used for tag helper discovery (source generator mode)", CommandOptionType.MultipleValue);
+            UseSourceGenerator = Option("--use-source-generator", "host the Razor source generator instead of the engine", CommandOptionType.NoValue);
         }
 
         public CommandOption Sources { get; }
@@ -66,6 +71,10 @@ namespace Microsoft.NET.Sdk.Razor.Tool
 
         public CommandOption SupportLocalizedComponentNames { get; }
 
+        public CommandOption Assemblies { get; }
+
+        public CommandOption UseSourceGenerator { get; }
+
         protected override Task<int> ExecuteCoreAsync()
         {
             if (!Parent.Checker.Check(ExtensionFilePaths.Values))
@@ -74,12 +83,19 @@ namespace Microsoft.NET.Sdk.Razor.Tool
                 return Task.FromResult(ExitCodeFailure);
             }
 
-            var version = RazorLanguageVersion.Parse(Version.Value());
-            var configuration = new RazorConfiguration(version, Configuration.Value(), Extensions: [], UseConsolidatedMvcViews: false);
-
             var sourceItems = GetSourceItems(
                 Sources.Values, Outputs.Values, RelativePaths.Values,
                 FileKinds.Values, CssScopeSources.Values, CssScopeValues.Values);
+
+            // The source generator path handles ordinary generation. Declaration-only generation
+            // (--generate-declaration) has no public generator output, so it stays on the engine path.
+            if (UseSourceGenerator.HasValue() && !GenerateDeclaration.HasValue())
+            {
+                return Task.FromResult(ExecuteWithSourceGenerator(sourceItems));
+            }
+
+            var version = RazorLanguageVersion.Parse(Version.Value());
+            var configuration = new RazorConfiguration(version, Configuration.Value(), Extensions: [], UseConsolidatedMvcViews: false);
 
             var result = ExecuteCore(
                 configuration: configuration,
@@ -188,24 +204,26 @@ namespace Microsoft.NET.Sdk.Razor.Tool
             {
                 b.RegisterExtensions();
 
-                b.Features.Add(new StaticTagHelperFeature() { TagHelpers = tagHelpers, });
-                b.Features.Add(new DefaultTypeNameFeature());
+                b.Features.Add(new StaticTagHelperFeature(tagHelpers));
 
-                if (GenerateDeclaration.HasValue())
+                b.ConfigureCodeGenerationOptions(b =>
                 {
-                    b.Features.Add(new SetSuppressPrimaryMethodBodyOptionFeature());
-                    b.Features.Add(new SuppressChecksumOptionsFeature());
-                }
+                    if (GenerateDeclaration.HasValue())
+                    {
+                        b.SuppressPrimaryMethodBody = true;
+                        b.SuppressChecksum = true;
+                    }
 
-                if (SupportLocalizedComponentNames.HasValue())
-                {
-                    b.Features.Add(new SetSupportLocalizedComponentNamesFeature());
-                }
+                    if (SupportLocalizedComponentNames.HasValue())
+                    {
+                        b.SupportLocalizedComponentNames = true;
+                    }
 
-                if (RootNamespace.HasValue())
-                {
-                    b.SetRootNamespace(RootNamespace.Value());
-                }
+                    if (RootNamespace.HasValue())
+                    {
+                        b.RootNamespace = RootNamespace.Value();
+                    }
+                });
 
                 if (CSharpLanguageVersion.HasValue())
                 {
@@ -255,7 +273,7 @@ namespace Microsoft.NET.Sdk.Razor.Tool
                 {
                     // Only output the file if we generated it without errors.
                     var outputFilePath = result.InputItem.OutputPath;
-                    var generatedCode = result.CSharpDocument.GeneratedCode;
+                    var generatedCode = result.CSharpDocument.Text.ToString();
                     if (isGeneratingDeclaration)
                     {
                         // When emiting declarations, only write if it the contents are different.
@@ -267,11 +285,90 @@ namespace Microsoft.NET.Sdk.Razor.Tool
                         }
                     }
 
-                    File.WriteAllText(outputFilePath, result.CSharpDocument.GeneratedCode);
+                    File.WriteAllText(outputFilePath, generatedCode);
                 }
             }
 
             return success ? ExitCodeSuccess : ExitCodeFailureRazorError;
+        }
+
+        private int ExecuteWithSourceGenerator(SourceItem[] sourceItems)
+        {
+            var parseOptions = RazorSourceGeneratorHost.CreateParseOptions(GetCSharpLanguageVersion());
+            var compilation = RazorSourceGeneratorHost.CreateCompilation(Assemblies.Values, Parent.AssemblyReferenceProvider);
+
+            var inputFiles = new List<RazorInputFile>(sourceItems.Length);
+            foreach (var item in sourceItems)
+            {
+                inputFiles.Add(new RazorInputFile(item.SourcePath, item.RelativePhysicalPath, item.CssScope));
+            }
+
+            var optionsProvider = RazorSourceGeneratorHost.CreateOptionsProvider(
+                razorConfiguration: Configuration.Value(),
+                razorLanguageVersion: Version.Value(),
+                rootNamespace: RootNamespace.Value(),
+                supportLocalizedComponentNames: SupportLocalizedComponentNames.HasValue(),
+                generateMetadataSourceChecksumAttributes: false,
+                projectDirectory: ProjectDirectory.Value(),
+                files: inputFiles);
+            var additionalTexts = RazorSourceGeneratorHost.CreateAdditionalTexts(inputFiles);
+
+            var runResult = RazorSourceGeneratorHost.CreateDriver(parseOptions)
+                .AddAdditionalTexts(additionalTexts)
+                .WithUpdatedAnalyzerConfigOptions(optionsProvider)
+                .RunGeneratorsAndUpdateCompilation(compilation, out _, out _)
+                .GetRunResult().Results.Single();
+
+            var success = true;
+            foreach (var diagnostic in runResult.Diagnostics)
+            {
+                if (diagnostic.Severity == DiagnosticSeverity.Error)
+                {
+                    success = false;
+                }
+
+                Error.WriteLine(diagnostic.ToString());
+            }
+
+            if (!success)
+            {
+                return ExitCodeFailureRazorError;
+            }
+
+            if (!RazorSourceGeneratorHostOutput.TryGet(runResult, out var razorResult))
+            {
+                Error.WriteLine("The Razor source generator did not produce the expected host output.");
+                return ExitCodeFailureRazorError;
+            }
+
+            // The generator emits one C# source per input; map it back to that input's requested output path.
+            var outputBySourcePath = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var item in sourceItems)
+            {
+                outputBySourcePath[item.SourcePath] = item.OutputPath;
+            }
+
+            foreach (var generated in runResult.GeneratedSources)
+            {
+                var sourcePath = razorResult.GetFilePath(generated.HintName);
+                if (sourcePath is not null && outputBySourcePath.TryGetValue(sourcePath, out var outputPath))
+                {
+                    File.WriteAllText(outputPath, generated.SourceText.ToString());
+                }
+            }
+
+            return ExitCodeSuccess;
+        }
+
+        private LanguageVersion GetCSharpLanguageVersion()
+        {
+            if (CSharpLanguageVersion.HasValue() &&
+                LanguageVersionFacts.TryParse(CSharpLanguageVersion.Value(), out var languageVersion))
+            {
+                return languageVersion;
+            }
+
+            return LanguageVersion.Default;
         }
 
         private VirtualRazorProjectFileSystem GetVirtualRazorProjectSystem(SourceItem[] inputItems)
@@ -293,23 +390,18 @@ namespace Microsoft.NET.Sdk.Razor.Tool
             return project;
         }
 
-        private IReadOnlyList<TagHelperDescriptor> GetTagHelpers(string tagHelperManifest)
+        private static TagHelperCollection GetTagHelpers(string tagHelperManifest)
         {
             if (!File.Exists(tagHelperManifest))
             {
-                return Array.Empty<TagHelperDescriptor>();
+                return [];
             }
 
             using (var stream = File.OpenRead(tagHelperManifest))
             {
-                var reader = new JsonTextReader(new StreamReader(stream));
+                var tagHelpers = JsonSerializer.Deserialize<IReadOnlyList<TagHelperDescriptor>>(stream, TagHelperDescriptorJsonConverter.SerializerOptions);
 
-                var serializer = new JsonSerializer();
-                serializer.Converters.Add(new RazorDiagnosticJsonConverter());
-                serializer.Converters.Add(new TagHelperDescriptorJsonConverter());
-
-                var descriptors = serializer.Deserialize<IReadOnlyList<TagHelperDescriptor>>(reader);
-                return descriptors;
+                return TagHelperCollection.Create(tagHelpers);
             }
         }
 
@@ -324,10 +416,13 @@ namespace Microsoft.NET.Sdk.Razor.Tool
             var items = new SourceItem[sources.Count];
             for (var i = 0; i < items.Length; i++)
             {
-                var fileKind = fileKinds.Count > 0 ? fileKinds[i] : "mvc";
+                var fileKind = fileKinds.Count > 0
+                    ? ConvertFileKind(fileKinds[i])
+                    : RazorFileKind.Legacy;
+
                 if (AspNetCore.Razor.Language.FileKinds.IsComponent(fileKind))
                 {
-                    fileKind = AspNetCore.Razor.Language.FileKinds.GetComponentFileKindFromFilePath(sources[i]);
+                    fileKind = GetComponentFileKindFromFilePath(sources[i]);
                 }
 
                 var cssScopeValue = cssScopeAssociations.TryGetValue(sources[i], out var cssScopeIndex)
@@ -338,6 +433,33 @@ namespace Microsoft.NET.Sdk.Razor.Tool
             }
 
             return items;
+        }
+
+        private static RazorFileKind ConvertFileKind(string fileKind)
+        {
+            if (string.Equals(fileKind, "component", StringComparison.OrdinalIgnoreCase))
+            {
+                return RazorFileKind.Component;
+            }
+
+            if (string.Equals(fileKind, "componentImport", StringComparison.OrdinalIgnoreCase))
+            {
+                return RazorFileKind.ComponentImport;
+            }
+
+            if (string.Equals(fileKind, "mvc", StringComparison.OrdinalIgnoreCase))
+            {
+                return RazorFileKind.Legacy;
+            }
+
+            return RazorFileKind.Legacy;
+        }
+
+        private static RazorFileKind GetComponentFileKindFromFilePath(string filePath)
+        {
+            return AspNetCore.Razor.Language.FileKinds.TryGetFileKindFromPath(filePath, out var kind) && kind != RazorFileKind.Legacy
+                ? kind
+                : RazorFileKind.Component;
         }
 
         private OutputItem[] GenerateCode(RazorProjectEngine engine, SourceItem[] inputs)
@@ -359,10 +481,10 @@ namespace Microsoft.NET.Sdk.Razor.Tool
         {
             public OutputItem(
                 SourceItem inputItem,
-                RazorCSharpDocument cSharpDocument)
+                RazorCSharpDocument csharpDocument)
             {
                 InputItem = inputItem;
-                CSharpDocument = cSharpDocument;
+                CSharpDocument = csharpDocument;
             }
 
             public SourceItem InputItem { get; }
@@ -372,7 +494,7 @@ namespace Microsoft.NET.Sdk.Razor.Tool
 
         private readonly struct SourceItem
         {
-            public SourceItem(string sourcePath, string outputPath, string physicalRelativePath, string fileKind, string cssScope)
+            public SourceItem(string sourcePath, string outputPath, string physicalRelativePath, RazorFileKind fileKind, string cssScope)
             {
                 SourcePath = sourcePath;
                 OutputPath = outputPath;
@@ -392,48 +514,14 @@ namespace Microsoft.NET.Sdk.Razor.Tool
 
             public string FilePath { get; }
 
-            public string FileKind { get; }
+            public RazorFileKind FileKind { get; }
 
             public string CssScope { get; }
         }
 
-        private class StaticTagHelperFeature : ITagHelperFeature
+        private sealed class StaticTagHelperFeature(TagHelperCollection tagHelpers) : RazorEngineFeatureBase, ITagHelperFeature
         {
-            public RazorEngine Engine { get; set; }
-
-            public IReadOnlyList<TagHelperDescriptor> TagHelpers { get; set; }
-
-            public IReadOnlyList<TagHelperDescriptor> GetDescriptors() => TagHelpers;
-        }
-
-        private class SetSuppressPrimaryMethodBodyOptionFeature : RazorEngineFeatureBase, IConfigureRazorCodeGenerationOptionsFeature
-        {
-            public int Order { get; set; }
-
-            public void Configure(RazorCodeGenerationOptionsBuilder options)
-            {
-                if (options == null)
-                {
-                    throw new ArgumentNullException(nameof(options));
-                }
-
-                options.SuppressPrimaryMethodBody = true;
-            }
-        }
-
-        private class SetSupportLocalizedComponentNamesFeature : RazorEngineFeatureBase, IConfigureRazorCodeGenerationOptionsFeature
-        {
-            public int Order { get; set; }
-
-            public void Configure(RazorCodeGenerationOptionsBuilder options)
-            {
-                if (options == null)
-                {
-                    throw new ArgumentNullException(nameof(options));
-                }
-
-                options.SupportLocalizedComponentNames = true;
-            }
+            public TagHelperCollection GetTagHelpers(CancellationToken cancellationToken) => tagHelpers;
         }
     }
 }

@@ -1,14 +1,16 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>$(SdkTargetFramework);net472</TargetFrameworks>
+    <TargetFramework>$(BundledNETCoreAppTargetFramework)</TargetFramework>
+    <IsMSBuildTaskProject>true</IsMSBuildTaskProject>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Nullable>annotations</Nullable>
+    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="$(RepoRoot)\src\Resolvers\Microsoft.NET.Sdk.WorkloadManifestReader\SdkFeatureBand.cs" LinkBase="Common"/>
+    <Compile Include="$(RepoRoot)src\Resolvers\Microsoft.NET.Sdk.WorkloadManifestReader\SdkFeatureBand.cs" LinkBase="Common"/>
     <Compile Include="$(RepoRoot)src\Common\WorkloadSetVersion.cs" LinkBase="Common" />
   </ItemGroup>
 
@@ -17,17 +19,9 @@
     <PackageReference Include="Microsoft.Build.Tasks.Core" />
     <PackageReference Include="Microsoft.Build.Utilities.Core" />
     <PackageReference Include="Microsoft.Deployment.DotNet.Releases" />
-    <PackageReference Include="Newtonsoft.Json" />
     <PackageReference Include="NuGet.Packaging" />
     <PackageReference Include="NuGet.Versioning" />
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(TargetFrameworkIdentifier)' == '.NETFramework'">
-    <PackageReference Include="System.Collections.Immutable" VersionOverride="$(SystemCollectionsImmutableToolsetPackageVersion)" />
-    <PackageReference Include="System.Reflection.Metadata" VersionOverride="$(SystemReflectionMetadataToolsetPackageVersion)" />
-    <PackageReference Include="System.Reflection.MetadataLoadContext" VersionOverride="$(SystemReflectionMetadataLoadContextToolsetPackageVersion)" />
-    <PackageReference Include="System.Resources.Extensions" VersionOverride="$(SystemResourcesExtensionsToolsetPackageVersion)" />
-    <Reference Include="System.Net.Http" />
+    <PackageReference Include="System.IO.Hashing" />
   </ItemGroup>
 
   <!-- Global usings -->

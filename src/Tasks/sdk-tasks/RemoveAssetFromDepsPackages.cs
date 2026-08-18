@@ -1,14 +1,18 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#nullable disable
+
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Build.Framework;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 
 namespace Microsoft.DotNet.Build.Tasks
 {
     public class RemoveAssetFromDepsPackages : Task
     {
+        private static readonly JsonSerializerOptions s_writeOptions = new() { WriteIndented = true };
+
         [Required]
         public string DepsFile { get; set; }
 
@@ -27,39 +31,34 @@ namespace Microsoft.DotNet.Build.Tasks
 
         public static void DoRemoveAssetFromDepsPackages(string depsFile, string sectionName, string assetPath)
         {
-            JToken deps;
-            using (var file = File.OpenText(depsFile))
-            using (JsonTextReader reader = new(file))
-            {
-                deps = JToken.ReadFrom(reader);
-            }
+            var deps = JsonNode.Parse(File.ReadAllText(depsFile));
 
-            foreach (JProperty target in deps["targets"])
+            bool found = false;
+            foreach (var target in deps["targets"]!.AsObject())
             {
-                foreach (JProperty pv in target.Value.Children<JProperty>())
+                foreach (var pv in target.Value!.AsObject())
                 {
-                    var section = pv.Value[sectionName];
+                    var section = pv.Value![sectionName];
                     if (section != null)
                     {
-                        foreach (JProperty relPath in section)
-                        {
-                            if (assetPath.Equals(relPath.Name))
-                            {
-                                relPath.Remove();
-                                break;
-                            }
-                        }
+                        var sectionObj = section.AsObject();
                         if (assetPath.Equals("*"))
                         {
-                            section.Parent.Remove();
+                            pv.Value.AsObject().Remove(sectionName);
+                            found = true;
+                        }
+                        else if (sectionObj.ContainsKey(assetPath))
+                        {
+                            sectionObj.Remove(assetPath);
+                            found = true;
                         }
                     }
                 }
             }
-            using (var file = File.CreateText(depsFile))
-            using (var writer = new JsonTextWriter(file) { Formatting = Formatting.Indented })
+
+            if (found)
             {
-                deps.WriteTo(writer);
+                File.WriteAllText(depsFile, deps.ToJsonString(s_writeOptions));
             }
         }
     }

@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#nullable disable
+
 using System.Diagnostics;
 
 namespace Microsoft.AspNetCore.StaticWebAssets.Tasks;
@@ -13,6 +15,8 @@ public class StaticWebAssetPathSegment : IEquatable<StaticWebAssetPathSegment>
     public bool IsOptional { get; set; }
 
     public bool IsPreferred { get; set; }
+
+    public bool IsPackOnly { get; set; }
 
     public override bool Equals(object obj) => Equals(obj as StaticWebAssetPathSegment);
 
@@ -49,7 +53,7 @@ public class StaticWebAssetPathSegment : IEquatable<StaticWebAssetPathSegment>
         return Parts != null && Parts.Count == 1 && Parts[0].IsLiteral ? Parts[0].Name.ToString() : ComputeParameterExpression();
 
         string ComputeParameterExpression() =>
-                string.Concat(Parts.Select(p => p.IsLiteral ? p.Name.ToString() : $"{{{p.Name}}}").Prepend("#[").Append($"]{(IsOptional ? (IsPreferred ? "!" : "?") : "")}"));
+                string.Concat(Parts.Select(p => p.IsLiteral ? p.Name.ToString() : $"{{{p.Name}}}").Prepend("#[").Append($"]{(IsPackOnly ? "~" : IsOptional ? (IsPreferred ? "!" : "?") : "")}"));
     }
 
     internal ICollection<ReadOnlyMemory<char>> GetTokenNames()

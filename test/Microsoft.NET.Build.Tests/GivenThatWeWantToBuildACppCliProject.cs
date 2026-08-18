@@ -1,20 +1,21 @@
-﻿// Licensed to the .NET Foundation under one or more agreements.
+// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
+
+#nullable disable
 
 using Microsoft.NET.Build.Tasks;
 
 namespace Microsoft.NET.Build.Tests
 {
+    [TestClass]
     public class GivenThatWeWantToBuildACppCliProject : SdkTest
     {
-        public GivenThatWeWantToBuildACppCliProject(ITestOutputHelper log) : base(log)
-        {
-        }
 
-        [FullMSBuildOnlyFact]
+        [TestMethod]
+        [FullMSBuildOnly]
         public void It_builds_and_runs()
         {
-            var testAsset = _testAssetsManager
+            var testAsset = TestAssetsManager
                 .CopyTestAsset("NetCoreCsharpAppReferenceCppCliLib")
                 .WithSource()
                 .WithProjectChanges((projectPath, project) => AddBuildProperty(projectPath, project, "EnableManagedpackageReferenceSupport", "true"));
@@ -47,29 +48,47 @@ namespace Microsoft.NET.Build.Tests
                 .HaveStdOutContaining("Hello, World!");
         }
 
-        [FullMSBuildOnlyFact]
+        [TestMethod]
+        [FullMSBuildOnly]
         public void It_builds_and_runs_with_package_reference()
         {
             var targetFramework = ToolsetInfo.CurrentTargetFramework + "-windows";
-            var testAsset = _testAssetsManager
+            var testAsset = TestAssetsManager
                 .CopyTestAsset("NetCoreCsharpAppReferenceCppCliLib")
                 .WithSource()
-                .WithProjectChanges((projectPath, project) => ConfigureProject(projectPath, project, targetFramework, new string[] { "_EnablePackageReferencesInVCProjects", "IncludeWindowsSDKRefFrameworkReferences" }));
+                .WithProjectChanges((projectPath, project) =>
+                    {
+                        ConfigureProject(projectPath, project, targetFramework, new string[] { "_EnablePackageReferencesInVCProjects", "IncludeWindowsSDKRefFrameworkReferences" });
+
+                        var ns = project.Root.Name.Namespace;
+                        //  Use project-specific global packages folder so we can check what was downloaded
+                        project.Root.Element(ns + "PropertyGroup")
+                            .Add(new XElement(ns + "RestorePackagesPath", @"$(MSBuildProjectDirectory)\packages"));
+
+                    });
 
             new BuildCommand(testAsset, "NETCoreCppCliTest")
-                .Execute("-p:Platform=x64")
+                .WithWorkingDirectory(testAsset.TestRoot)
+                .Execute("-p:Platform=x64", "/bl")
                 .Should()
                 .Pass();
 
             var cppnProjProperties = GetPropertyValues(testAsset.TestRoot, "NETCoreCppCliTest", targetFramework: targetFramework);
-            Assert.True(cppnProjProperties["_EnablePackageReferencesInVCProjects"] == "true");
-            Assert.True(cppnProjProperties["IncludeWindowsSDKRefFrameworkReferences"] == "");
+            Assert.AreEqual("true", cppnProjProperties["_EnablePackageReferencesInVCProjects"]);
+            Assert.AreEqual("", cppnProjProperties["IncludeWindowsSDKRefFrameworkReferences"]);
+
+            var packagesFolder = Path.Combine(testAsset.TestRoot, "NETCoreCppCliTest", "packages");
+            if (Directory.Exists(packagesFolder))
+            {
+                new DirectoryInfo(packagesFolder).Should().NotHaveSubDirectories("microsoft.windows.sdk.net.ref");
+            }
         }
 
-        [FullMSBuildOnlyFact]
+        [TestMethod]
+        [FullMSBuildOnly]
         public void Given_no_restore_It_builds_cpp_project()
         {
-            var testAsset = _testAssetsManager
+            var testAsset = TestAssetsManager
                 .CopyTestAsset("NetCoreCsharpAppReferenceCppCliLib")
                 .WithSource()
                 .WithProjectChanges((projectPath, project) => AddBuildProperty(projectPath, project, "EnableManagedpackageReferenceSupport", "True")); ;
@@ -80,10 +99,11 @@ namespace Microsoft.NET.Build.Tests
                 .Pass();
         }
 
-        [FullMSBuildOnlyFact]
+        [TestMethod]
+        [FullMSBuildOnly]
         public void Given_Wpf_framework_reference_It_builds_cpp_project()
         {
-            var testAsset = _testAssetsManager
+            var testAsset = TestAssetsManager
                 .CopyTestAsset("CppCliLibWithWpfFrameworkReference")
                 .WithSource();
 
@@ -93,10 +113,11 @@ namespace Microsoft.NET.Build.Tests
                 .Pass();
         }
 
-        [FullMSBuildOnlyFact]
+        [TestMethod]
+        [FullMSBuildOnly]
         public void It_fails_with_error_message_on_EnableComHosting()
         {
-            var testAsset = _testAssetsManager
+            var testAsset = TestAssetsManager
                 .CopyTestAsset("NetCoreCsharpAppReferenceCppCliLib")
                 .WithSource()
                 .WithProjectChanges((projectPath, project) =>
@@ -121,10 +142,11 @@ namespace Microsoft.NET.Build.Tests
                 .HaveStdOutContaining(Strings.NoSupportCppEnableComHosting);
         }
 
-        [FullMSBuildOnlyFact]
+        [TestMethod]
+        [FullMSBuildOnly]
         public void It_fails_with_error_message_on_fullframework()
         {
-            var testAsset = _testAssetsManager
+            var testAsset = TestAssetsManager
                 .CopyTestAsset("NetCoreCsharpAppReferenceCppCliLib")
                 .WithSource()
                 .WithProjectChanges((projectPath, project) =>
@@ -138,10 +160,11 @@ namespace Microsoft.NET.Build.Tests
                 .HaveStdOutContaining(Strings.NETFrameworkWithoutUsingNETSdkDefaults);
         }
 
-        [FullMSBuildOnlyFact]
+        [TestMethod]
+        [FullMSBuildOnly]
         public void It_fails_with_error_message_on_tfm_lower_than_3_1()
         {
-            var testAsset = _testAssetsManager
+            var testAsset = TestAssetsManager
                 .CopyTestAsset("NetCoreCsharpAppReferenceCppCliLib")
                 .WithSource()
                 .WithProjectChanges((projectPath, project) =>
@@ -155,10 +178,11 @@ namespace Microsoft.NET.Build.Tests
                 .HaveStdOutContaining(Strings.CppRequiresTFMVersion31);
         }
 
-        [FullMSBuildOnlyFact]
+        [TestMethod]
+        [FullMSBuildOnly]
         public void When_run_with_selfcontained_It_fails_with_error_message()
         {
-            var testAsset = _testAssetsManager
+            var testAsset = TestAssetsManager
                 .CopyTestAsset("NetCoreCsharpAppReferenceCppCliLib")
                 .WithSource();
 

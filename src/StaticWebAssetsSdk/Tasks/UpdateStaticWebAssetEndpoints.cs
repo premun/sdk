@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#nullable disable
+
 using Microsoft.Build.Framework;
 
 namespace Microsoft.AspNetCore.StaticWebAssets.Tasks;
@@ -27,6 +29,7 @@ namespace Microsoft.AspNetCore.StaticWebAssets.Tasks;
 // This will remove the updated endpoints from the original list and add the updated ones back in. Including any endpoint that might
 // have been removed because it had the same route as one of the updated endpoints.
 
+[MSBuildMultiThreadableTask]
 public class UpdateStaticWebAssetEndpoints : Task
 {
     [Required] public ITaskItem[] EndpointsToUpdate { get; set; }

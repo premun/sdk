@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#nullable disable
+
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
 
@@ -163,7 +165,7 @@ internal class FingerprintPatternMatcher
         }
     }
 
-    private class FingerprintPattern(ITaskItem pattern)
+    internal class FingerprintPattern(ITaskItem pattern)
     {
         StaticWebAssetGlobMatcher _matcher;
         public string Name { get; set; } = pattern.ItemSpec;

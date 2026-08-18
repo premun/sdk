@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text;
 using System.Xml;
 using System.Xml.Serialization;
 
@@ -17,7 +18,7 @@ namespace Microsoft.DotNet.ApiCompatibility.Logging
         protected const string DiagnosticIdDocumentationComment = " https://learn.microsoft.com/dotnet/fundamentals/package-validation/diagnostic-ids ";
         private readonly HashSet<Suppression> _baselineSuppressions = [];
         private readonly HashSet<Suppression> _suppressions = [];
-        private readonly HashSet<string> _noWarn = string.IsNullOrEmpty(noWarn) ? [] : new HashSet<string>(noWarn!.Split(';'));
+        private readonly HashSet<string> _noWarn = string.IsNullOrEmpty(noWarn) ? [] : new(noWarn!.Split(';'), StringComparer.OrdinalIgnoreCase);
 
         /// <inheritdoc/>
         public bool BaselineAllErrors { get; } = baselineAllErrors;
@@ -132,13 +133,20 @@ namespace Microsoft.DotNet.ApiCompatibility.Logging
             using Stream stream = GetWritableStream(suppressionOutputFile);
             XmlWriter xmlWriter = XmlWriter.Create(stream, new XmlWriterSettings()
             {
-                Encoding = Encoding.UTF8,
+                Encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), // UTF-8, no BOM
                 ConformanceLevel = ConformanceLevel.Document,
                 Indent = true
             });
 
             xmlWriter.WriteComment(DiagnosticIdDocumentationComment);
             CreateXmlSerializer().Serialize(xmlWriter, orderedSuppressions);
+            xmlWriter.Flush(); // ensure XML is written
+
+            // Write a new line character at the end of the file as the suppression file often gets checked-in
+            // and many repos configure `insert_final_newline=true` in their .editorconfig.
+            xmlWriter.WriteWhitespace(Environment.NewLine);
+
+            // Callback for tests
             AfterWritingSuppressionsCallback(stream);
 
             return (true, orderedSuppressions);

@@ -2,16 +2,10 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Microsoft.Build.Framework;
+using Microsoft.DotNet.Cli.Utils;
 using Microsoft.NET.Sdk.WorkloadManifestReader;
 using System.Collections.Immutable;
 
-#if NET
-using Microsoft.DotNet.Cli;
-#else
-using Microsoft.DotNet.DotNetSdkResolver;
-#endif
-
-#nullable enable
 namespace Microsoft.NET.Sdk.WorkloadMSBuildSdkResolver
 {
 
@@ -70,7 +64,7 @@ namespace Microsoft.NET.Sdk.WorkloadMSBuildSdkResolver
 
             if (_enabled)
             {
-                string sentinelPath = Path.Combine(Path.GetDirectoryName(typeof(CachingWorkloadResolver).Assembly.Location) ?? string.Empty, "DisableWorkloadResolver.sentinel");
+                string sentinelPath = Path.Combine(SdkPaths.SdkDirectory, "DisableWorkloadResolver.sentinel");
                 if (File.Exists(sentinelPath))
                 {
                     _enabled = false;
